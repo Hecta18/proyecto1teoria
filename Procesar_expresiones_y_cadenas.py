@@ -5,8 +5,12 @@
 #   3) construcción del árbol sintáctico
 #   4) construcción del AFN con el algoritmo de Thompson (lectura depth first de árbol)
 #   5) impresion del AFN en consola
-#   6) simulación del AFN con la cadena de simbolos
-#   7) impresion del resultado de la simulación en consola
+#   6) construcción del AFD por construcción directa (followpos), a partir
+#      del mismo árbol sintáctico (construccion_directa_afd.py)
+#   7) dibujo del AFN y del AFD (afd_dibujo_simulacion.py)
+#   8) simulación de cada cadena contra el AFN y contra el AFD
+#   9) impresion del resultado de ambas simulaciones y verificación de que
+#      coinciden (deben reconocer el mismo lenguaje)
 
 import os
 import sys
@@ -15,6 +19,8 @@ import regex_tokenize
 import shunting_yard_regex as shyR
 import Arbol_sintactico as arbol
 import thompson_arbol as thompson
+import construccion_directa_afd as afd_directo
+import afd_dibujo_simulacion as afd_mod
 
 MARCADOR_CADENAS = '# --- Cadenas ---'
 RUTAS_ENTRADA = ('expresiones_y_cadenas', 'expresiones_y_cadenas.txt')
@@ -62,8 +68,9 @@ def _resolver_ruta_entrada(ruta: str | None = None) -> str:
 
 
 def procesar_expresion(regex: str, indice: int, directorio_afns: str,
-                       mostrar_afn: bool = True) -> thompson.AFN:
-    """Procesa una expresión regular: postfix → árbol → AFN → JPEG."""
+                       directorio_afds: str = "AFDs",
+                       mostrar_afn: bool = True) -> tuple[thompson.AFN, afd_directo.AFD]:
+    """Procesa una expresión regular: postfix → árbol → AFN y AFD → JPEG."""
     print("=" * 70)
     print(f"Expresión {indice}: {regex}")
     print("-" * 70)
@@ -88,20 +95,31 @@ def procesar_expresion(regex: str, indice: int, directorio_afns: str,
     recorrido = arbol.recorrido_postorden(raiz)
     print(f"\nRecorrido postorden (DFS): {' '.join(recorrido)}")
 
+    # --- AFN (Thompson) ---
     nfa = thompson.construir_afn_desde_arbol(raiz)
     print("\nAFN (Thompson):")
     thompson.imprimir_afn(nfa)
 
     slug = thompson._slug_desde_regex(regex)
-    nombre = f"afn_{indice:02d}_{slug}"
-    thompson.dibujar_afn(nfa, nombre, directorio=directorio_afns)
+    nombre_afn = f"afn_{indice:02d}_{slug}"
+    thompson.dibujar_afn(nfa, nombre_afn, directorio=directorio_afns)
+
+    # --- AFD (construcción directa vía followpos) ---
+    print("\nAFD (construcción directa):")
+    _, afd = afd_directo.procesar_arbol_a_afd(raiz)
+    afd_directo.imprimir_resultado_afd(afd)
+
+    nombre_afd = f"afd_{indice:02d}_{slug}"
+    afd_mod.dibujar_afd(afd, nombre_afd, directorio=directorio_afds)
+
     print()
-    return nfa
+    return nfa, afd
 
 
 def procesar_archivo(ruta: str | None = None, directorio_afns: str = "AFNs",
+                     directorio_afds: str = "AFDs",
                      mostrar_afn: bool = True) -> None:
-    """Procesa expresiones regulares y simula todas las cadenas contra todos los AFN."""
+    """Procesa expresiones regulares y simula todas las cadenas contra AFN y AFD."""
     ruta = _resolver_ruta_entrada(ruta)
     expresiones, cadenas = leer_expresiones_y_cadenas(ruta)
 
@@ -114,35 +132,55 @@ def procesar_archivo(ruta: str | None = None, directorio_afns: str = "AFNs",
               f"'{MARCADOR_CADENAS}'.")
 
     os.makedirs(directorio_afns, exist_ok=True)
+    os.makedirs(directorio_afds, exist_ok=True)
 
     afns: list[thompson.AFN] = []
+    afds: list[afd_directo.AFD] = []
+    expresiones_ok: list[str] = []
     for i, regex in enumerate(expresiones, 1):
         try:
-            nfa = procesar_expresion(regex, i, directorio_afns, mostrar_afn=mostrar_afn)
+            nfa, afd = procesar_expresion(regex, i, directorio_afns,
+                                          directorio_afds=directorio_afds,
+                                          mostrar_afn=mostrar_afn)
             afns.append(nfa)
+            afds.append(afd)
+            expresiones_ok.append(regex)
         except ValueError as exc:
             print(f"Error en expresión {i} ({regex!r}): {exc}")
             print()
 
     if not afns:
-        print("No se construyó ningún AFN válido.")
+        print("No se construyó ningún AFN/AFD válido.")
         return
 
     if not cadenas:
         return
 
     print("=" * 70)
-    print("Simulación (todas las cadenas × todos los AFN):")
+    print("Simulación (todas las cadenas × todos los AFN y AFD):")
     print("-" * 70)
 
-    for i, (regex, nfa) in enumerate(zip(expresiones[:len(afns)], afns), 1):
+    todo_coincide = True
+    for i, (regex, nfa, afd) in enumerate(zip(expresiones_ok, afns, afds), 1):
         for cadena_raw in cadenas:
             cadena = thompson.normalizar_cadena(cadena_raw)
-            aceptada = thompson.simular(nfa, cadena)
-            resultado = 'yes' if aceptada else 'no'
+            aceptada_afn = thompson.simular(nfa, cadena)
+            aceptada_afd = afd_mod.simular_afd(afd, cadena)
+            coincide = aceptada_afn == aceptada_afd
+            todo_coincide = todo_coincide and coincide
+
+            resultado_afn = 'yes' if aceptada_afn else 'no'
+            resultado_afd = 'yes' if aceptada_afd else 'no'
             cadena_display = cadena if cadena else 'ε'
-            print(f"AFN {i} | Expresión: {regex} | Cadena: {cadena_display} | "
-                  f"Resultado: {resultado}")
+            marca = '' if coincide else '  <-- AFN y AFD difieren!'
+            print(f"Expresión {i} ({regex}) | Cadena: {cadena_display} | "
+                  f"AFN: {resultado_afn} | AFD: {resultado_afd}{marca}")
+
+    print("-" * 70)
+    if todo_coincide:
+        print("OK: el AFN y el AFD coincidieron en todas las cadenas.")
+    else:
+        print("ATENCIÓN: hubo discrepancias entre AFN y AFD (revisar arriba).")
 
 
 if __name__ == "__main__":
