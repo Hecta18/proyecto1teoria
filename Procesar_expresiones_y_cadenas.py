@@ -3,14 +3,18 @@
 #   1) tokenización + concatenación implícita (infix)
 #   2) conversión a postfix (Shunting Yard, shunting_yard_regex.py)
 #   3) construcción del árbol sintáctico
-#   4) construcción del AFN con el algoritmo de Thompson (lectura depth first de árbol)
-#   5) impresion del AFN en consola
-#   6) construcción del AFD por construcción directa (followpos), a partir
-#      del mismo árbol sintáctico (construccion_directa_afd.py)
-#   7) dibujo del AFN y del AFD (afd_dibujo_simulacion.py)
-#   8) simulación de cada cadena contra el AFN y contra el AFD
-#   9) impresion del resultado de ambas simulaciones y verificación de que
-#      coinciden (deben reconocer el mismo lenguaje)
+#   4) construcción del AFN con el algoritmo de Thompson (thompson_arbol.py)
+#      y dibujo del AFN
+#   5) construcción del AFD por subconjuntos (ε-clausura + move), a partir
+#      del AFN (construccion_subconjuntos.py), y dibujo del AFD
+#   6) minimización del AFD por subconjuntos con partición/refinamiento
+#      (minimizacion_afd.py), y dibujo del AFD mínimo
+#   7) construcción del AFD por construcción directa (followpos), a partir
+#      del mismo árbol sintáctico (construccion_directa_afd.py), y dibujo
+#   8) minimización del AFD por construcción directa (mismo módulo que el
+#      paso 6), y dibujo
+#   9) simulación de cada cadena contra el AFN y contra los cuatro AFD
+#  10) verificación de que todos reconocen el mismo lenguaje en cada cadena
 
 import os
 import sys
@@ -20,6 +24,8 @@ import shunting_yard_regex as shyR
 import Arbol_sintactico as arbol
 import thompson_arbol as thompson
 import construccion_directa_afd as afd_directo
+import construccion_subconjuntos as subconjuntos
+import minimizacion_afd as minimo
 import afd_dibujo_simulacion as afd_mod
 
 MARCADOR_CADENAS = '# --- Cadenas ---'
@@ -67,10 +73,19 @@ def _resolver_ruta_entrada(ruta: str | None = None) -> str:
     )
 
 
-def procesar_expresion(regex: str, indice: int, directorio_afns: str,
-                       directorio_afds: str = "AFDs",
-                       mostrar_afn: bool = True) -> tuple[thompson.AFN, afd_directo.AFD]:
-    """Procesa una expresión regular: postfix → árbol → AFN y AFD → JPEG."""
+def procesar_expresion(
+    regex: str,
+    indice: int,
+    directorio_afns: str,
+    directorio_afds: str = "AFDs",
+    directorio_afds_sub: str = "AFDs_subconjuntos",
+    directorio_afds_min: str = "AFDs_minimos",
+    mostrar_afn: bool = True,
+) -> dict:
+    """Procesa una expresión regular completa:
+    postfix → árbol → AFN → AFD(subconjuntos) → AFD mínimo → AFD directo
+    → AFD mínimo (directo). Devuelve un dict con todos los autómatas.
+    """
     print("=" * 70)
     print(f"Expresión {indice}: {regex}")
     print("-" * 70)
@@ -95,31 +110,57 @@ def procesar_expresion(regex: str, indice: int, directorio_afns: str,
     recorrido = arbol.recorrido_postorden(raiz)
     print(f"\nRecorrido postorden (DFS): {' '.join(recorrido)}")
 
+    slug = thompson._slug_desde_regex(regex)
+
     # --- AFN (Thompson) ---
     nfa = thompson.construir_afn_desde_arbol(raiz)
     print("\nAFN (Thompson):")
     thompson.imprimir_afn(nfa)
+    thompson.dibujar_afn(nfa, f"afn_{indice:02d}_{slug}", directorio=directorio_afns)
 
-    slug = thompson._slug_desde_regex(regex)
-    nombre_afn = f"afn_{indice:02d}_{slug}"
-    thompson.dibujar_afn(nfa, nombre_afn, directorio=directorio_afns)
+    # --- AFD por subconjuntos (a partir del AFN) ---
+    print("\nAFD (construcción por subconjuntos):")
+    afd_sub = subconjuntos.construir_afd_por_subconjuntos(nfa)
+    subconjuntos.imprimir_afd_subconjuntos(afd_sub)
+    afd_mod.dibujar_afd(afd_sub, f"afd_sub_{indice:02d}_{slug}",
+                        directorio=directorio_afds_sub)
 
-    # --- AFD (construcción directa vía followpos) ---
+    # --- AFD mínimo del AFD por subconjuntos ---
+    print("\nAFD mínimo (partición/refinamiento) del AFD por subconjuntos:")
+    afd_min_sub = minimo.minimizar_afd(afd_sub)
+    afd_mod.dibujar_afd(afd_min_sub, f"afd_min_sub_{indice:02d}_{slug}",
+                        directorio=directorio_afds_min)
+
+    # --- AFD por construcción directa (vía followpos) ---
     print("\nAFD (construcción directa):")
-    _, afd = afd_directo.procesar_arbol_a_afd(raiz)
-    afd_directo.imprimir_resultado_afd(afd)
+    _, afd_directa = afd_directo.procesar_arbol_a_afd(raiz)
+    afd_directo.imprimir_resultado_afd(afd_directa)
+    afd_mod.dibujar_afd(afd_directa, f"afd_{indice:02d}_{slug}",
+                        directorio=directorio_afds)
 
-    nombre_afd = f"afd_{indice:02d}_{slug}"
-    afd_mod.dibujar_afd(afd, nombre_afd, directorio=directorio_afds)
+    # --- AFD mínimo del AFD por construcción directa ---
+    print("\nAFD mínimo (partición/refinamiento) del AFD por construcción directa:")
+    afd_min_directa = minimo.minimizar_afd(afd_directa)
+    afd_mod.dibujar_afd(afd_min_directa, f"afd_min_{indice:02d}_{slug}",
+                        directorio=directorio_afds_min)
 
     print()
-    return nfa, afd
+    return {
+        'nfa': nfa,
+        'afd_sub': afd_sub,
+        'afd_min_sub': afd_min_sub,
+        'afd_directa': afd_directa,
+        'afd_min_directa': afd_min_directa,
+    }
 
 
 def procesar_archivo(ruta: str | None = None, directorio_afns: str = "AFNs",
                      directorio_afds: str = "AFDs",
+                     directorio_afds_sub: str = "AFDs_subconjuntos",
+                     directorio_afds_min: str = "AFDs_minimos",
                      mostrar_afn: bool = True) -> None:
-    """Procesa expresiones regulares y simula todas las cadenas contra AFN y AFD."""
+    """Procesa expresiones regulares y simula todas las cadenas contra todos
+    los autómatas (AFN + 4 AFD), verificando que coincidan."""
     ruta = _resolver_ruta_entrada(ruta)
     expresiones, cadenas = leer_expresiones_y_cadenas(ruta)
 
@@ -131,25 +172,27 @@ def procesar_archivo(ruta: str | None = None, directorio_afns: str = "AFNs",
         print(f"Advertencia: el archivo '{ruta}' no contiene cadenas en la sección "
               f"'{MARCADOR_CADENAS}'.")
 
-    os.makedirs(directorio_afns, exist_ok=True)
-    os.makedirs(directorio_afds, exist_ok=True)
+    for directorio in (directorio_afns, directorio_afds,
+                       directorio_afds_sub, directorio_afds_min):
+        os.makedirs(directorio, exist_ok=True)
 
-    afns: list[thompson.AFN] = []
-    afds: list[afd_directo.AFD] = []
+    automatas: list[dict] = []
     expresiones_ok: list[str] = []
     for i, regex in enumerate(expresiones, 1):
         try:
-            nfa, afd = procesar_expresion(regex, i, directorio_afns,
-                                          directorio_afds=directorio_afds,
-                                          mostrar_afn=mostrar_afn)
-            afns.append(nfa)
-            afds.append(afd)
+            automatas.append(procesar_expresion(
+                regex, i, directorio_afns,
+                directorio_afds=directorio_afds,
+                directorio_afds_sub=directorio_afds_sub,
+                directorio_afds_min=directorio_afds_min,
+                mostrar_afn=mostrar_afn,
+            ))
             expresiones_ok.append(regex)
         except ValueError as exc:
             print(f"Error en expresión {i} ({regex!r}): {exc}")
             print()
 
-    if not afns:
+    if not automatas:
         print("No se construyó ningún AFN/AFD válido.")
         return
 
@@ -157,30 +200,58 @@ def procesar_archivo(ruta: str | None = None, directorio_afns: str = "AFNs",
         return
 
     print("=" * 70)
-    print("Simulación (todas las cadenas × todos los AFN y AFD):")
+    print("Simulación (todas las cadenas × AFN, AFD subconjuntos, "
+          "AFD mínimos y AFD directos):")
     print("-" * 70)
 
+    columnas = [
+        ('afd_sub', 'AFD-sub'),
+        ('afd_min_sub', 'AFD-min(sub)'),
+        ('afd_directa', 'AFD-directo'),
+        ('afd_min_directa', 'AFD-min(dir)'),
+    ]
+
     todo_coincide = True
-    for i, (regex, nfa, afd) in enumerate(zip(expresiones_ok, afns, afds), 1):
+    minimos_iguales = True
+    for i, (regex, res) in enumerate(zip(expresiones_ok, automatas), 1):
+        nfa = res['nfa']
+        print(f"\nExpresión {i} ({regex})")
+        encabezado = "    cadena     AFN" + "".join(
+            f"  {etiqueta:^12}" for _, etiqueta in columnas
+        )
+        print(encabezado)
+        print("  " + "-" * (len(encabezado) - 2))
+
+        if len(res['afd_min_sub'].estados) != len(res['afd_min_directa'].estados):
+            minimos_iguales = False
+
         for cadena_raw in cadenas:
             cadena = thompson.normalizar_cadena(cadena_raw)
-            aceptada_afn = thompson.simular(nfa, cadena)
-            aceptada_afd = afd_mod.simular_afd(afd, cadena)
-            coincide = aceptada_afn == aceptada_afd
+            resultados = [thompson.simular(nfa, cadena)] + [
+                afd_mod.simular_afd(res[clave], cadena) for clave, _ in columnas
+            ]
+            coincide = all(r == resultados[0] for r in resultados)
             todo_coincide = todo_coincide and coincide
 
-            resultado_afn = 'yes' if aceptada_afn else 'no'
-            resultado_afd = 'yes' if aceptada_afd else 'no'
             cadena_display = cadena if cadena else 'ε'
-            marca = '' if coincide else '  <-- AFN y AFD difieren!'
-            print(f"Expresión {i} ({regex}) | Cadena: {cadena_display} | "
-                  f"AFN: {resultado_afn} | AFD: {resultado_afd}{marca}")
+            fila = f"    {cadena_display:<9}"
+            for r in resultados:
+                fila += f"  {'yes' if r else 'no':^12}"
+            fila += "   " + ("OK" if coincide else "<-- DIFIEREN!")
+            print(fila)
 
     print("-" * 70)
     if todo_coincide:
-        print("OK: el AFN y el AFD coincidieron en todas las cadenas.")
+        print("OK: AFN y los cuatro AFD coincidieron en todas las cadenas.")
     else:
-        print("ATENCIÓN: hubo discrepancias entre AFN y AFD (revisar arriba).")
+        print("ATENCIÓN: hubo discrepancias entre autómatas (revisar arriba).")
+
+    if minimos_iguales:
+        print("Nota: ambos AFD mínimos tienen el mismo número de estados "
+              "(mismo lenguaje).")
+    else:
+        print("Ojo: los AFD mínimos tienen distinto número de estados; "
+              "revise la minimización.")
 
 
 if __name__ == "__main__":
