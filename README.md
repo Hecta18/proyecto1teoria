@@ -149,3 +149,5 @@ python -m unittest discover -s tests -t . -v
 - **Documentación de los autómatas**: los estados del AFD se etiquetan
   `A, B, C, ..., A1, B1, ...` (`construccion_directa_afd._nombre_estado`), lo
   que permite seguir la traza de la simulación en consola.
+
+  **Link del video** : https://youtu.be/ev5UUJJdRog 
